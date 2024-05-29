@@ -1,0 +1,1 @@
+python train.py --train_dir ./Face_Dataset/Train --val_dir ./Face_Dataset/Validation --batch_size 32 --num_epochs 20 
