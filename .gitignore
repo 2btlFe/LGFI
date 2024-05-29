@@ -4,6 +4,7 @@
 *.pth
 *.xml
 *.pkl
+
 FaceSwap*
 id*
 identity*
@@ -17,3 +18,5 @@ tensorflow_gpu*
 face_identification*
 chanege_name*
 crop*
+test
+
