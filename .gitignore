@@ -18,5 +18,7 @@ tensorflow_gpu*
 face_identification*
 chanege_name*
 crop*
-test
+test/
+test/*.jpg
+test/*.pkl
 
