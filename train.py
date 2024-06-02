@@ -15,6 +15,7 @@ from PIL import Image
 import torch.nn as nn
 import argparse
 from loss.loss import Main_Loss, Aux_Loss
+from model.modified_facenet import ModifiedInceptionResnetV1
 
 # 초기 random seed
 seed_value = 5
@@ -194,65 +195,70 @@ if __name__ == "__main__":
 
     #----------Training Set 얼굴 crop--------------------------------------------------------------------#
 
-    # 1. MTCNN 불러오기
-    mtcnn = MTCNN(
-        image_size=160, margin=0, min_face_size=20,
-        thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
-        device=device
-    )
+    # # 1. MTCNN 불러오기
+    # mtcnn = MTCNN(
+    #     image_size=160, margin=0, min_face_size=20,
+    #     thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
+    #     device=device
+    # )
 
-    # 2. 얼굴 Crop을 위한 Dataset 지정
-    dataset = datasets.ImageFolder(train_dir, transform=transforms.Resize((512, 512)))
-    dataset.samples = [
-        (p, p.replace(train_dir, train_dir + '_cropped'))
-            for p, _ in dataset.samples
-    ]
+    # # 2. 얼굴 Crop을 위한 Dataset 지정
+    # dataset = datasets.ImageFolder(train_dir, transform=transforms.Resize((512, 512)))
+    # dataset.samples = [
+    #     (p, p.replace(train_dir, train_dir + '_cropped'))
+    #         for p, _ in dataset.samples
+    # ]
 
-    # 3. 얼굴 Crop을 위한 데이터 로더 지정
-    loader = DataLoader(
-        dataset,
-        num_workers=workers,
-        batch_size=batch_size,
-        collate_fn=training.collate_pil
-    )
+    # # 3. 얼굴 Crop을 위한 데이터 로더 지정
+    # loader = DataLoader(
+    #     dataset,
+    #     num_workers=workers,
+    #     batch_size=batch_size,
+    #     collate_fn=training.collate_pil
+    # )
 
-    # 4. 실제 얼굴 Crop 실행 및 저장 (Train_cropped에 저장됨)
-    for i, (x, y) in enumerate(loader):
-        mtcnn(x, save_path=y)
-        print('\rBatch {} of {}'.format(i + 1, len(loader)), end='')
+    # # 4. 실제 얼굴 Crop 실행 및 저장 (Train_cropped에 저장됨)
+    # for i, (x, y) in enumerate(loader):
+    #     mtcnn(x, save_path=y)
+    #     print('\rBatch {} of {}'.format(i + 1, len(loader)), end='')
 
     #--------------------------------------------------------------------------------------------------#
 
     #----------Validztion Set 얼굴 crop--------------------------------------------------------------------#
     # 1. 얼굴 crop을 위한 Validation dataset 생성
-    val_dataset = datasets.ImageFolder(val_dir, transform=transforms.Resize((512, 512)))
-    val_dataset.samples = [
-        (p, p.replace(val_dir, val_dir + '_cropped'))
-            for p, _ in val_dataset.samples
-    ]
+    # val_dataset = datasets.ImageFolder(val_dir, transform=transforms.Resize((512, 512)))
+    # val_dataset.samples = [
+    #     (p, p.replace(val_dir, val_dir + '_cropped'))
+    #         for p, _ in val_dataset.samples
+    # ]
     
-    # 2. 데이터로더 제작
-    val_loader = DataLoader(
-        val_dataset,
-        num_workers=workers,
-        batch_size=batch_size,
-        collate_fn=training.collate_pil
-    )
+    # # 2. 데이터로더 제작
+    # val_loader = DataLoader(
+    #     val_dataset,
+    #     num_workers=workers,
+    #     batch_size=batch_size,
+    #     collate_fn=training.collate_pil
+    # )
 
-    # 3. 얼굴 crop 실행
-    for i, (x, y) in enumerate(val_loader):
-        mtcnn(x, save_path=y)
-        print('\rBatch {} of {}'.format(i + 1, len(val_loader)), end='')
+    # # 3. 얼굴 crop 실행
+    # for i, (x, y) in enumerate(val_loader):
+    #     mtcnn(x, save_path=y)
+    #     print('\rBatch {} of {}'.format(i + 1, len(val_loader)), end='')
 
-    # mtcnn GPU에서 내리기
-    del mtcnn
+    # # mtcnn GPU에서 내리기
+    # del mtcnn
     #----------------------------------------------------------------------------------------------------#
 
     # InceptionResnetV1 불러오기 - vggface2로 pretrained한 모델 가져오기--------------------------------------#
     model = InceptionResnetV1(
-        classify=False,
+        classify=True,
         pretrained='vggface2',
     ).to(device)
+    
+    model.logits = nn.Linear(in_features=512, out_features=60, bias=True)
+
+    # ipdb.set_trace()
+
     #---------------------------------------------------------------------------------------------------#
 
     # Face Identification을 위한 Data List 불러오기--------------------------------------------------------#
@@ -260,9 +266,28 @@ if __name__ == "__main__":
     train_dir_list = next(os.walk(train_dir))[1]
     train_triplet = create_triplets(train_dir, train_dir_list)  # 이게 중요한 것인데 - Triplet을 학습 중에 골라내는 것이 아니라 갯수가 적으니 미리 random하게 지정해둔다 
 
+    # CE loss를 위한 train_dataset
+    train_dataset = datasets.ImageFolder(train_dir, transform=trans)
+    train_loader = DataLoader(
+        train_dataset,
+        num_workers=workers,
+        batch_size=batch_size,
+        collate_fn=training.collate_pil
+    )
+
     val_dir = val_dir + '_cropped'
     val_dir_list = next(os.walk(val_dir))[1]
     val_triplet  = create_triplets(val_dir, val_dir_list)
+
+    # CE loss check를 위한 val_dataset
+    val_dataset = datasets.ImageFolder(val_dir, transform=trans)
+    val_loader = DataLoader(
+        val_dataset,
+        num_workers=workers,
+        batch_size=batch_size,
+        collate_fn=training.collate_pil
+    )
+
     #---------------------------------------------------------------------------------------------------#
 
     print("Number of training triplets:", len(train_triplet))
@@ -331,7 +356,8 @@ if __name__ == "__main__":
     work_dir = f'work_dir/{args.model_name}_{num_epochs}_{batch_size}'
     writer = SummaryWriter(work_dir)
     # Loss
-    main_loss = Main_Loss(args.main_loss, criterion=criterion).get_loss_function()
+    main1_loss = Main_Loss('ce').get_loss_function()
+    main2_loss = Main_Loss(args.main_loss, criterion=criterion).get_loss_function()
     
     if args.aux_loss == 'randreg':
         #ipdb.set_trace()
@@ -339,7 +365,122 @@ if __name__ == "__main__":
     else:
         aux_loss = Aux_Loss(args.aux_loss).get_loss_function()
     # ------------------------------------------------------------------------------------------------#
-    for epoch in range(num_epochs):
+    
+    # split epoch
+    ce_epochs = num_epochs
+    triplet_epochs = max(num_epochs - 20, 0)
+
+    # CE loss 적용
+    for epoch in range(ce_epochs):
+        # train loss 
+        train_loss_sum = 0.0
+        sup_loss_sum = 0.0
+        reg_loss_sum = 0.0
+        num_batches = 0
+        
+        # triplet 다시 만들기 - 매번 random하게 지정될 필요가 있다
+        train_dir_list = next(os.walk(train_dir))[1]
+        train_triplet = create_triplets(train_dir, train_dir_list)  # 이게 중요한 것인데 - Triplet을 학습 중에 골라내는 것이 아니라 갯수가 적으니 미리 random하게 지정해둔다 
+        
+        # Triplet에 대해서 학습 적용하기
+        for batch_idx, sample in enumerate(train_loader):
+            # 에포크마다 시드를 변경 (옵션)
+            random.seed(epoch)
+            np.random.seed(epoch)
+            torch.manual_seed(epoch)
+            torch.cuda.manual_seed_all(epoch)
+
+            # Main loss
+            sup_loss = main1_loss(model, sample)
+            sup_loss_sum += sup_loss.item()
+
+            # Aux loss
+            reg_loss = aux_loss(model, frozen_model, sample)
+            reg_loss_sum += reg_loss.item()
+
+            # Total loss
+            loss = sup_loss + reg_loss * reg_coeff
+            train_loss_sum += loss.item()
+
+            '''
+            (예은, 선재)
+            Regularization Term 추가 - 여기만 Argument화 하든 class화 하든 여러번 실험하면 좋다
+            ''' 
+            # 이건 예시입니다
+            
+            # frozen_anchor_embedding = frozen_model(anchor)
+            # frozen_pos_embedding = frozen_model(positive)
+            # frozen_neg_embedding = frozen_model(negative)
+
+            # frozen_anchor_dist=  anchor_embedding - frozen_anchor_embedding
+            # frozen_pos_dist = positive_embedding - frozen_pos_embedding
+            # frozen_neg_dist = negative_embedding - frozen_neg_embedding
+            
+            # reg_coeff = 0.005   # hyper parameter
+            # loss_reg = torch.norm(frozen_anchor_dist, p=2) + torch.norm(frozen_pos_dist, p=2) + torch.norm(frozen_neg_dist, p=2)
+            # loss += loss_reg * reg_coeff
+            
+            ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+
+            # Optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            num_batches += 1
+
+        avg_train_loss = train_loss_sum / num_batches
+        avg_sup_loss = sup_loss_sum / num_batches
+        avg_reg_loss = reg_loss_sum / num_batches
+        print(f"Epoch {epoch+1}/{ce_epochs}, Training Loss: {avg_train_loss:.4f}")
+
+        # TensorBoard에 기록
+        writer.add_scalar('Loss/Train_loss', avg_train_loss, epoch)
+        writer.add_scalar('Loss/Sup_loss', avg_sup_loss, epoch)
+        writer.add_scalar('Loss/Reg_loss', avg_reg_loss, epoch)
+
+        # validation per 10 epochs
+        if epoch % 10 == 0:
+            val_loss_sum = 0.0
+            val_sup_loss_sum = 0.0
+            val_reg_loss_sum = 0.0
+            model.eval()
+            with torch.no_grad():
+                for val_batch_label in get_batch(val_dir, val_triplet, batch_size=32, preprocess=True, need_meta=True):
+                    
+                    # Main loss
+                    val_sup_loss = main_loss(model, val_batch_label)
+                    val_sup_loss_sum += val_sup_loss.item()
+
+                    # Aux loss
+                    val_reg_loss = aux_loss(model, frozen_model, val_batch_label)
+                    val_reg_loss_sum += val_reg_loss.item()
+
+                    # Total loss
+                    loss = val_sup_loss + val_reg_loss * reg_coeff
+                    val_loss_sum += loss.item()
+
+            avg_val_loss = val_loss_sum / (len(val_triplet) / 32)
+            avg_val_sup_loss = val_sup_loss_sum / (len(val_triplet) / 32)
+            avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
+            
+            print(f"Epoch {epoch+1}/{ce_epochs}, Validation Loss: {avg_val_loss:.4f}")
+
+            # TensorBoard에 기록
+            writer.add_scalar('Loss/Validation_loss', avg_val_loss, epoch)
+            writer.add_scalar('Loss/Validation_sup_loss', avg_val_sup_loss, epoch)
+            writer.add_scalar('Loss/Validation_reg_loss', avg_val_reg_loss, epoch)
+
+            # Train Mode로 다시 돌아오기
+            model.train()
+    
+    
+    
+    
+    
+    
+    # Triplet loss 적용
+    for epoch in range(triplet_epochs):
         # train loss 
         train_loss_sum = 0.0
         sup_loss_sum = 0.0
@@ -410,7 +551,7 @@ if __name__ == "__main__":
         avg_train_loss = train_loss_sum / num_batches
         avg_sup_loss = sup_loss_sum / num_batches
         avg_reg_loss = reg_loss_sum / num_batches
-        print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {avg_train_loss:.4f}")
+        print(f"Epoch {epoch+1}/{triplet_epochs}, Training Loss: {avg_train_loss:.4f}")
 
         # TensorBoard에 기록
         writer.add_scalar('Loss/Train_loss', avg_train_loss, epoch)
@@ -442,7 +583,7 @@ if __name__ == "__main__":
             avg_val_sup_loss = val_sup_loss_sum / (len(val_triplet) / 32)
             avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
             
-            print(f"Epoch {epoch+1}/{num_epochs}, Validation Loss: {avg_val_loss:.4f}")
+            print(f"Epoch {epoch+1}/{triplet_epochs}, Validation Loss: {avg_val_loss:.4f}")
 
             # TensorBoard에 기록
             writer.add_scalar('Loss/Validation_loss', avg_val_loss, epoch)

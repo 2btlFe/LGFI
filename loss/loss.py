@@ -10,8 +10,8 @@ class Main_Loss:
     def get_loss_function(self):
         if self.loss_type == 'triplet':
             return self.Triplet(**self.kwargs)
-        # elif self.loss_type == 'ce':
-        #     return self.CE(**self.kwargs)
+        elif self.loss_type == 'ce':
+            return self.CE(**self.kwargs)
         else:
             raise ValueError(f"Unsupported loss type: {self.loss_type}")
     
@@ -37,25 +37,22 @@ class Main_Loss:
             loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
             return loss
 
-    # class CE(nn.Module):
-    #     def __init__(self, **kwargs):
-    #         super().__init__()
-    #         # FNP specific initialization here
-    #         # For example:
-    #         # self.some_parameter = kwargs.get('some_parameter', default_value)
-    #         self.criterion = kwargs.get('criterion', nn.TripletMarginLoss(margin=1.0, p=2))
+    class CE(nn.Module):
+        def __init__(self, **kwargs):
+            super().__init__()
+            self.criterion = kwargs.get('criterion', nn.CrossEntropyLoss())
             
-    #     def forward(self, model, batch):
-    #         # Implement the FNP loss calculation here
-    #         loss = 0.0
+        def forward(self, model, batch):
+            # Implement the CE loss calculation here
+            loss = 0.0
 
-    #         anchor, positive, negative = batch
-    #         anchor_embedding = model(anchor)
-    #         positive_embedding = model(positive)
-    #         negative_embedding = model(negative)
+            anchor, positive, negative = batch
+            anchor_embedding = model(anchor)
+            positive_embedding = model(positive)
+            negative_embedding = model(negative)
             
-    #         loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
-    #         return loss
+            loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
+            return loss
 
 class Aux_Loss:
     def __init__(self, loss_type, **kwargs):
@@ -87,6 +84,9 @@ class Aux_Loss:
             anchor, positive, negative = batch # 삼중항 선택
 
             for sample in batch:
+                
+                ipdb.set_trace()
+                
                 embedding = model(sample)
                 frozen_embedding = frozen_model(sample)
                 dist = embedding - frozen_embedding
@@ -104,7 +104,7 @@ class Aux_Loss:
         def forward(self, model, frozen_model, batch):
             # Implement the L2SP loss calculation here
             loss = 0.0
-            
+
             pretrained_params = {name: param.clone().detach() for name, param in frozen_model.named_parameters()}
 
             for name, param in model.named_parameters():
