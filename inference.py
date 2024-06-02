@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import torch.nn as nn
 import argparse
+import logging
 
 
 random.seed(5)
@@ -101,11 +102,46 @@ if __name__ == "__main__":
     # Inference Argument
     parser = argparse.ArgumentParser(description='test')
     parser.add_argument('--test_dir', type=str, default='./Face_Dataset/Test', help='Test Image Directory')
-    parser.add_argument('--batch_size', type=int, default='1', help='batch_size')
+    parser.add_argument('--train_dir', type=str, default='./Face_Dataset/Train', help='Train Image Directory')
+    parser.add_argument('--work_dir', type=str, default='None', help='work_dir')
     parser.add_argument('--pretrained', type=str, default='None', help='batch_size')
+    parser.add_argument('--model_name', type=str, default='face_recognition')
     args = parser.parse_args()
 
+    target_dir = args.train_dir + '_cropped'
+    test_dir = args.test_dir
+    work_dir = args.work_dir
+    batch_size = 1
+    model_name = args.model_name
     workers = 0 if os.name == 'nt' else 8
+
+    # Logging Configuration
+    os.makedirs(work_dir, exist_ok=True)
+    
+    # 로거 설정
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # 파일 핸들러 설정
+    file_handler = logging.FileHandler(f'{work_dir}/results.log', mode='w')
+    file_handler.setLevel(logging.INFO)
+
+    # 콘솔 핸들러 설정
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+
+    # 포매터 설정
+    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # 핸들러를 로거에 추가
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    logger.info(f'test_dir : {test_dir}')
+    logger.info(f'pretrained : {args.pretrained}')
+    logger.info(f'model_name : {model_name}')
 
     # GPU
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -117,9 +153,6 @@ if __name__ == "__main__":
         thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
         device=device
     )
-
-    test_dir = args.test_dir
-    batch_size = args.batch_size
 
     # Test Dataset Generation
     dataset = datasets.ImageFolder(test_dir, transform=transforms.Resize((512, 512)))
@@ -171,15 +204,9 @@ if __name__ == "__main__":
 
     # Target Embedding 제작
     target_embeddings = {}
-    target_dir = 'Face_Dataset/Train_cropped'
-
-    #ipdb.set_trace()
-
     target_dir_list = os.listdir(target_dir)
-    #ipdb.set_trace()
-
+    
     for label in target_dir_list:
-        
         path = os.path.join(target_dir, label)
         files = list(os.listdir(path))
 
@@ -198,30 +225,30 @@ if __name__ == "__main__":
 
         target_embeddings[label] = embedding
 
-
     correct  = 0
     total = 0
+    correct_classes = []
+    incorrect_classes = []
     for image, label in test_loader:
-        
         image = image.to(device)
         label = class_names[int(label)]
         test_emb = get_embedding(model, image.squeeze(0))
         
-        #ipdb.set_trace()
-        top_5_results = identify_face(test_emb, target_embeddings, top_k=5)
-        print(f"{label} result:")
-        for name, distance in top_5_results:
-            print(f"Name: {name}, Distance: {distance}")
-
-        #ipdb.set_trace()
-        gt = str(label)
-        top_5_names = [name for name, _ in top_5_results]
-        is_gt_in_top_5 = gt in top_5_names
+        results = identify_face(test_emb, target_embeddings, top_k=5)
+        logger.info(f"{label} result:")
+        for name, distance in results:
+            logger.info(f"Name: {name}, Distance: {distance}")
         
-        if is_gt_in_top_5:
-            correct += 1
+        gt = str(label)
+        names = [name for name, _ in results]
+        is_gt_in_top = gt in names
+        
         total += 1
-
+        if is_gt_in_top:
+            correct += 1
+            correct_classes.append(gt)
+        else:
+            incorrect_classes.append(gt)
 
         #ipdb.set_trace()
         # id = identify_face(test_emb, target_embeddings)
@@ -233,6 +260,17 @@ if __name__ == "__main__":
         #     correct += 1
         # total += 1
 
-    accuracy = correct / total
-    print("\n")
-    print(f"Accuracy: {accuracy:.4f}")
+    # 요약 정보 출력
+    accuracy = correct / total * 100
+    logger.info(f"Total samples: {total}")
+    logger.info(f"Correct predictions: {correct}")
+    logger.info(f"Incorrect predictions: {total - correct}")
+    logger.info(f"Accuracy: {accuracy:.2f}%")
+
+    logger.info("Correctly predicted classes:")
+    for cls in set(correct_classes):
+        logger.info(f"{cls}: {correct_classes.count(cls)}")
+
+    logger.info("Incorrectly predicted classes:")
+    for cls in set(incorrect_classes):
+        logger.info(f"{cls}: {incorrect_classes.count(cls)}")

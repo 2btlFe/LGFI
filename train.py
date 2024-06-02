@@ -14,10 +14,15 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import torch.nn as nn
 import argparse
+from loss.loss import Main_Loss, Aux_Loss
 
-random.seed(5)
-np.random.seed(5)
-torch.manual_seed(5)
+# 초기 random seed
+seed_value = 5
+random.seed(seed_value)
+np.random.seed(seed_value)
+torch.manual_seed(seed_value)
+torch.cuda.manual_seed_all(seed_value)
+torch.backends.cudnn.deterministic = True
 
 # Transform 
 trans = transforms.Compose([
@@ -90,34 +95,57 @@ def read_image(root, index):
         image = cache_img[path]
     return image
 
-def get_batch(root, triplet_list, batch_size=64, preprocess=True):
+
+# Function to compute embedding
+def get_embedding(model, img_tensor):
+    with torch.no_grad():
+        #ipdb.set_trace()
+        embedding = model(img_tensor.unsqueeze(0))
+    return embedding
+
+def get_batch(root, triplet_list, batch_size=64, preprocess=True, need_meta=False):
     batch_steps = len(triplet_list)//batch_size
     
     for i in range(batch_steps+1):
         anchor   = []
         positive = []
         negative = []
+        anchor_label = []
+        negative_label = []
         
         j = i*batch_size
+        
         while j<(i+1)*batch_size and j<len(triplet_list):
             a, p, n = triplet_list[j]
             anchor.append(trans(read_image(root, a)))
             positive.append(trans(read_image(root, p)))
             negative.append(trans(read_image(root, n)))
+            
+            anchor_label.append(int(a[0]))
+            negative_label.append(int(n[0]))
+
             j+=1
         
+
         #ipdb.set_trace()
-        anchor = torch.stack(anchor).cuda(non_blocking=True)
-        positive = torch.stack(positive).cuda(non_blocking=True)
-        negative = torch.stack(negative).cuda(non_blocking=True)
-        
+        anchor = torch.stack(anchor).cuda(non_blocking=True)        #[Batch, 3, 160, 160]
+        positive = torch.stack(positive).cuda(non_blocking=True)    #[Batch, 3, 160, 160]
+        negative = torch.stack(negative).cuda(non_blocking=True)    #[Batch, 3, 160, 160]
+        anchor_label = torch.from_numpy(np.array(anchor_label))
+        negative_label = torch.from_numpy(np.array(negative_label)) 
+
         # if preprocess:
         #     ipdb.set_trace()
         #     anchor = trans(anchor)
         #     positive = trans(positive)
         #     negative = trans(negative)
         
-        yield ([anchor, positive, negative])
+        if need_meta == True:
+            yield ([[anchor, positive, negative], anchor_label, negative_label])
+        else:
+            yield ([anchor, positive, negative])
+            
+
 
         del anchor, positive, negative
         torch.cuda.empty_cache()
@@ -146,12 +174,17 @@ if __name__ == "__main__":
     parser.add_argument('--val_dir', type=str, default='./Face_Dataset/Validation', help='Validation Image Directory')
     parser.add_argument('--batch_size', type=int, default='32', help='batch_size')
     parser.add_argument('--num_epochs', type=int, default='100', help='batch_size')
+    parser.add_argument('--model_name', type=str, default='face_recognition')
+    parser.add_argument('--main_loss', type=str, default='triplet')
+    parser.add_argument('--aux_loss', type=str, default='fnp')
     args = parser.parse_args()
 
     train_dir = args.train_dir
     val_dir = args.val_dir
     batch_size = args.batch_size
     num_epochs = args.num_epochs
+    
+    reg_coeff = 0.005  # hyper parameter, you can tune this
     workers = 0 if os.name == 'nt' else 8
 
     # Load GPU
@@ -174,7 +207,7 @@ if __name__ == "__main__":
         (p, p.replace(train_dir, train_dir + '_cropped'))
             for p, _ in dataset.samples
     ]
-    
+
     # 3. 얼굴 Crop을 위한 데이터 로더 지정
     loader = DataLoader(
         dataset,
@@ -187,7 +220,7 @@ if __name__ == "__main__":
     for i, (x, y) in enumerate(loader):
         mtcnn(x, save_path=y)
         print('\rBatch {} of {}'.format(i + 1, len(loader)), end='')
-        
+
     #--------------------------------------------------------------------------------------------------#
 
     #----------Validztion Set 얼굴 crop--------------------------------------------------------------------#
@@ -215,8 +248,6 @@ if __name__ == "__main__":
     del mtcnn
     #----------------------------------------------------------------------------------------------------#
 
-
-
     # InceptionResnetV1 불러오기 - vggface2로 pretrained한 모델 가져오기--------------------------------------#
     model = InceptionResnetV1(
         classify=False,
@@ -234,7 +265,6 @@ if __name__ == "__main__":
     val_triplet  = create_triplets(val_dir, val_dir_list)
     #---------------------------------------------------------------------------------------------------#
 
-
     print("Number of training triplets:", len(train_triplet))
     print("Number of validation triplets :", len(val_triplet))
 
@@ -242,21 +272,8 @@ if __name__ == "__main__":
     for i in range(3):
         print(train_triplet[i])
 
-
-    # 학습 툴 지정 --------------------------------------------------------------------------------------#
-    # Define Optimizer 
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    # Define Scheduler 
-    scheduler = MultiStepLR(optimizer, [5, 10])
-    # Define Loss and Evaluation functions
-    criterion = nn.TripletMarginLoss(margin=1.0, p=2)
-    # Tensorboard Initialization
-    writer = SummaryWriter('runs/face_recognition_experiment_first_order')
-    # ------------------------------------------------------------------------------------------------#
-
-
-    # Training----------------------------------------------------------------------------------------#
     
+    # Training----------------------------------------------------------------------------------------#    
     # Frozen model 지정----------------------#
     frozen_model = InceptionResnetV1(
         classify=False,
@@ -267,27 +284,102 @@ if __name__ == "__main__":
     for param in frozen_model.parameters():
         param.requires_grad = False
     #---------------------------------------#
-        
+    
+    # Find Frozen Embedding Mu / Sigma    
+    class_dir = os.listdir(train_dir)
+
+    num_class = len(class_dir)
+    mu = [torch.zeros(512, requires_grad=False)] # Training Mean
+    sigma = [torch.ones(512, requires_grad=False)]            # Fixed Stdev
+
+    frozen_model.eval()
+    # Frozen Embedding 
+    with torch.no_grad():
+        train_dir_list = os.listdir(train_dir)
+        embedding = []
+        total = 0
+        for label in train_dir_list:
+            
+            path = os.path.join(train_dir, label)
+            files = list(os.listdir(path))
+
+            for file in files:
+                idx = [label, file]
+                img = trans(read_image(train_dir, idx)).to(device)   #tensor [3, 160, 160]
+                temp_emb = get_embedding(frozen_model, img)  
+                embedding.append(temp_emb)
+            
+            total += len(files)
+            print(f"{label} : {len(files)} / {total}")
+
+
+        # average embedding
+        #ipdb.set_trace()
+        avg_emb = torch.mean(torch.stack(embedding), dim=0)
+        std_emb = torch.std(torch.stack(embedding), dim=0)
+        #optimizer = torch.optim.SGD([param for param in mu if param.requires_grad], lr=0.01)
+    #---------------------------------------#
+
+    # 학습 툴 지정 --------------------------------------------------------------------------------------#
+    # Define Optimizer 
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Define Scheduler 
+    scheduler = MultiStepLR(optimizer, [5, 10])
+    # Define Loss and Evaluation functions
+    criterion = nn.TripletMarginLoss(margin=1.0, p=2)
+    # Tensorboard Initialization
+    work_dir = f'work_dir/{args.model_name}_{num_epochs}_{batch_size}'
+    writer = SummaryWriter(work_dir)
+    # Loss
+    main_loss = Main_Loss(args.main_loss, criterion=criterion).get_loss_function()
+    
+    if args.aux_loss == 'randreg':
+        #ipdb.set_trace()
+        aux_loss = Aux_Loss(args.aux_loss, mu=avg_emb, sigma=std_emb).get_loss_function()
+    else:
+        aux_loss = Aux_Loss(args.aux_loss).get_loss_function()
+    # ------------------------------------------------------------------------------------------------#
     for epoch in range(num_epochs):
         # train loss 
-        train_loss = 0.0
-        #reg_loss = 0.0
+        train_loss_sum = 0.0
+        sup_loss_sum = 0.0
+        reg_loss_sum = 0.0
         num_batches = 0
-
+        
         # triplet 다시 만들기 - 매번 random하게 지정될 필요가 있다
-
-
+        train_dir_list = next(os.walk(train_dir))[1]
+        train_triplet = create_triplets(train_dir, train_dir_list)  # 이게 중요한 것인데 - Triplet을 학습 중에 골라내는 것이 아니라 갯수가 적으니 미리 random하게 지정해둔다 
+        
         # Triplet에 대해서 학습 적용하기
-        for batch in get_batch(train_dir, train_triplet, batch_size=32, preprocess=True):
-            
+        for batch_label in get_batch(train_dir, train_triplet, batch_size=32, preprocess=True, need_meta=True):
+            # 에포크마다 시드를 변경 (옵션)
+            random.seed(epoch)
+            np.random.seed(epoch)
+            torch.manual_seed(epoch)
+            torch.cuda.manual_seed_all(epoch)
+
             #ipdb.set_trace()
-            anchor, positive, negative = batch # 삼중항 선택
-            anchor_embedding = model(anchor)
-            positive_embedding = model(positive)
-            negative_embedding = model(negative)
+
             
-            loss = criterion(anchor_embedding, positive_embedding, negative_embedding)
+            # anchor_embedding = model(anchor)
+            # positive_embedding = model(positive)
+            # negative_embedding = model(negative)
             
+            # loss = criterion(anchor_embedding, positive_embedding, negative_embedding)
+            
+
+            # Main loss
+            sup_loss = main_loss(model, batch_label)
+            sup_loss_sum += sup_loss.item()
+
+            # Aux loss
+            reg_loss = aux_loss(model, frozen_model, batch_label)
+            reg_loss_sum += reg_loss.item()
+
+            # Total loss
+            loss = sup_loss + reg_loss * reg_coeff
+            train_loss_sum += loss.item()
+
             '''
             (예은, 선재)
             Regularization Term 추가 - 여기만 Argument화 하든 class화 하든 여러번 실험하면 좋다
@@ -308,62 +400,60 @@ if __name__ == "__main__":
             
             ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
+            # Optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # Record train_loss
-            train_loss += loss.item()
             num_batches += 1
 
-
-        avg_train_loss = train_loss / num_batches
+        avg_train_loss = train_loss_sum / num_batches
+        avg_sup_loss = sup_loss_sum / num_batches
+        avg_reg_loss = reg_loss_sum / num_batches
         print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {avg_train_loss:.4f}")
 
         # TensorBoard에 기록
-        writer.add_scalar('Loss/Train', avg_train_loss, epoch)
-        #writer.add_scalar('Loss/Reg', reg_loss, epoch)
+        writer.add_scalar('Loss/Train_loss', avg_train_loss, epoch)
+        writer.add_scalar('Loss/Sup_loss', avg_sup_loss, epoch)
+        writer.add_scalar('Loss/Reg_loss', avg_reg_loss, epoch)
 
         # validation per 10 epochs
         if epoch % 10 == 0:
-            val_loss = 0.0
+            val_loss_sum = 0.0
+            val_sup_loss_sum = 0.0
+            val_reg_loss_sum = 0.0
             model.eval()
             with torch.no_grad():
-                for val_batch in get_batch(val_dir, val_triplet, batch_size=32, preprocess=True):
-                    anchor, positive, negative = val_batch
-                    anchor_embedding = model(anchor)
-                    positive_embedding = model(positive)
-                    negative_embedding = model(negative)
+                for val_batch_label in get_batch(val_dir, val_triplet, batch_size=32, preprocess=True, need_meta=True):
                     
-                    val_loss += criterion(anchor_embedding, positive_embedding, negative_embedding).item()
+                    # Main loss
+                    val_sup_loss = main_loss(model, val_batch_label)
+                    val_sup_loss_sum += val_sup_loss.item()
 
-                    # reg term
-                    '''
-                    frozen_anchor_embedding = frozen_model(anchor)
-                    frozen_pos_embedding = frozen_model(positive)
-                    frozen_neg_embedding = frozen_model(negative)
+                    # Aux loss
+                    val_reg_loss = aux_loss(model, frozen_model, val_batch_label)
+                    val_reg_loss_sum += val_reg_loss.item()
 
-                    frozen_anchor_dist=  anchor_embedding - frozen_anchor_embedding
-                    frozen_pos_dist = positive_embedding - frozen_pos_embedding
-                    frozen_neg_dist = negative_embedding - frozen_neg_embedding
-                    
-                    reg_coeff = 0.005   # hyper parameter
-                    loss_reg = torch.norm(frozen_anchor_dist, p=2) + torch.norm(frozen_pos_dist, p=2) + torch.norm(frozen_neg_dist, p=2)
-                    val_loss += loss_reg * reg_coeff
-                    '''
+                    # Total loss
+                    loss = val_sup_loss + val_reg_loss * reg_coeff
+                    val_loss_sum += loss.item()
 
-            avg_val_loss = val_loss / (len(val_triplet) / 32)
+            avg_val_loss = val_loss_sum / (len(val_triplet) / 32)
+            avg_val_sup_loss = val_sup_loss_sum / (len(val_triplet) / 32)
+            avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
+            
             print(f"Epoch {epoch+1}/{num_epochs}, Validation Loss: {avg_val_loss:.4f}")
 
             # TensorBoard에 기록
-            writer.add_scalar('Loss/Validation', avg_val_loss, epoch)
+            writer.add_scalar('Loss/Validation_loss', avg_val_loss, epoch)
+            writer.add_scalar('Loss/Validation_sup_loss', avg_val_sup_loss, epoch)
+            writer.add_scalar('Loss/Validation_reg_loss', avg_val_reg_loss, epoch)
 
             # Train Mode로 다시 돌아오기
             model.train()
     
     # save the model 
-    os.makedirs('model', exist_ok=True)
-    save_path = f'model/Facenet512_transfer_learning_{num_epochs}_{batch_size}_deepfake.pth'
+    save_path = f'{work_dir}/{args.model_name}_{num_epochs}_{batch_size}_deepfake.pth'
     state_dict = model.state_dict()
     state_dict = {k: v for k, v in state_dict.items() if not k.startswith('logits')}
     torch.save(state_dict, save_path)
