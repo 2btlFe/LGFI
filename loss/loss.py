@@ -1,6 +1,8 @@
 import torch
 import ipdb
 import torch.nn as nn
+import torch.nn.functional as F
+
 
 class Main_Loss:
     def __init__(self, loss_type, **kwargs):
@@ -42,16 +44,18 @@ class Main_Loss:
             super().__init__()
             self.criterion = kwargs.get('criterion', nn.CrossEntropyLoss())
             
-        def forward(self, model, batch):
+        def forward(self, model, sample):
             # Implement the CE loss calculation here
             loss = 0.0
 
-            anchor, positive, negative = batch
-            anchor_embedding = model(anchor)
-            positive_embedding = model(positive)
-            negative_embedding = model(negative)
-            
-            loss = self.criterion(anchor_embedding, positive_embedding, negative_embedding)
+            #ipdb.set_trace()
+
+            img, target = sample
+            img = img.cuda()
+            target = target.cuda()
+
+            logit = model(img)
+            loss = self.criterion(logit, target)
             return loss
 
 class Aux_Loss:
@@ -85,7 +89,7 @@ class Aux_Loss:
 
             for sample in batch:
                 
-                ipdb.set_trace()
+                # ipdb.set_trace()
                 
                 embedding = model(sample)
                 frozen_embedding = frozen_model(sample)

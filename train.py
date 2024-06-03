@@ -27,6 +27,9 @@ torch.backends.cudnn.deterministic = True
 
 # Transform 
 trans = transforms.Compose([
+    # transforms.RandomHorizontalFlip(p=0.5),  # Randomly flip the image horizontally
+    # transforms.RandomRotation(degrees=15),  # Randomly rotate the image by up to 15 degrees
+    # transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),  # Adjust brightness, contrast, saturation, and hue
     transforms.Lambda(lambda img: np.array(img, dtype=np.float32)),  # PIL 이미지를 float32로 변환
     transforms.ToTensor(),  # 이미지를 텐서로 변환
     fixed_image_standardization  # 고정 이미지 표준화 적용
@@ -178,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument('--model_name', type=str, default='face_recognition')
     parser.add_argument('--main_loss', type=str, default='triplet')
     parser.add_argument('--aux_loss', type=str, default='fnp')
+    parser.add_argument('--start_epoch', type=float, default=1.0)
     args = parser.parse_args()
 
     train_dir = args.train_dir
@@ -253,11 +257,46 @@ if __name__ == "__main__":
     model = InceptionResnetV1(
         classify=True,
         pretrained='vggface2',
+        num_classes=60
     ).to(device)
     
-    model.logits = nn.Linear(in_features=512, out_features=60, bias=True)
 
-    # ipdb.set_trace()
+    #------------------------------------------Freeze model -------------------------------------------#
+    # # Freeze all layers
+    # for param in model.parameters():
+    #     param.requires_grad = False
+
+    # # Unfreeze some specific layers, for example, the last linear layer and last batch norm layer
+    # for param in model.last_linear.parameters():
+    #     param.requires_grad = True
+    # for param in model.last_bn.parameters():
+    #     param.requires_grad = True
+
+    # # Set different learning rates
+    # learning_rate_1 = 1e-4  # For frozen layers (though they are frozen, this shows the setup)
+    # learning_rate_2 = 1e-3  # For unfrozen layers
+
+    # # Define parameter groups
+    # param_groups = [
+    #     {'params': model.conv2d_1a.parameters(), 'lr': learning_rate_1},
+    #     {'params': model.conv2d_2a.parameters(), 'lr': learning_rate_1},
+    #     {'params': model.conv2d_2b.parameters(), 'lr': learning_rate_1},
+    #     {'params': model.last_linear.parameters(), 'lr': learning_rate_2},
+    #     {'params': model.last_bn.parameters(), 'lr': learning_rate_2}
+    # ]
+
+    # # Create an optimizer
+    # optimizer = optim.Adam(param_groups)
+
+
+
+
+
+
+
+    #model.logits = nn.Linear(in_features=128, out_features=60, bias=True)
+
+    #ipdb.set_trace()
 
     #---------------------------------------------------------------------------------------------------#
 
@@ -272,7 +311,8 @@ if __name__ == "__main__":
         train_dataset,
         num_workers=workers,
         batch_size=batch_size,
-        collate_fn=training.collate_pil
+        shuffle=True
+        #collate_fn=collate_fn_pil
     )
 
     val_dir = val_dir + '_cropped'
@@ -285,7 +325,7 @@ if __name__ == "__main__":
         val_dataset,
         num_workers=workers,
         batch_size=batch_size,
-        collate_fn=training.collate_pil
+        #collate_fn=collate_fn_pil
     )
 
     #---------------------------------------------------------------------------------------------------#
@@ -367,15 +407,15 @@ if __name__ == "__main__":
     # ------------------------------------------------------------------------------------------------#
     
     # split epoch
-    ce_epochs = num_epochs
-    triplet_epochs = max(num_epochs - 20, 0)
+    ce_epochs = int(num_epochs * args.start_epoch)
+    triplet_epochs = int(num_epochs* (1.0 - args.start_epoch))
+
 
     # CE loss 적용
-    for epoch in range(ce_epochs):
+    for epoch in range(0, ce_epochs):
         # train loss 
         train_loss_sum = 0.0
         sup_loss_sum = 0.0
-        reg_loss_sum = 0.0
         num_batches = 0
         
         # triplet 다시 만들기 - 매번 random하게 지정될 필요가 있다
@@ -389,38 +429,18 @@ if __name__ == "__main__":
             np.random.seed(epoch)
             torch.manual_seed(epoch)
             torch.cuda.manual_seed_all(epoch)
-
+            
             # Main loss
             sup_loss = main1_loss(model, sample)
             sup_loss_sum += sup_loss.item()
 
-            # Aux loss
-            reg_loss = aux_loss(model, frozen_model, sample)
-            reg_loss_sum += reg_loss.item()
+            # # Aux loss
+            # reg_loss = aux_loss(model, frozen_model, sample)
+            # reg_loss_sum += reg_loss.item()
 
             # Total loss
-            loss = sup_loss + reg_loss * reg_coeff
+            loss = sup_loss 
             train_loss_sum += loss.item()
-
-            '''
-            (예은, 선재)
-            Regularization Term 추가 - 여기만 Argument화 하든 class화 하든 여러번 실험하면 좋다
-            ''' 
-            # 이건 예시입니다
-            
-            # frozen_anchor_embedding = frozen_model(anchor)
-            # frozen_pos_embedding = frozen_model(positive)
-            # frozen_neg_embedding = frozen_model(negative)
-
-            # frozen_anchor_dist=  anchor_embedding - frozen_anchor_embedding
-            # frozen_pos_dist = positive_embedding - frozen_pos_embedding
-            # frozen_neg_dist = negative_embedding - frozen_neg_embedding
-            
-            # reg_coeff = 0.005   # hyper parameter
-            # loss_reg = torch.norm(frozen_anchor_dist, p=2) + torch.norm(frozen_pos_dist, p=2) + torch.norm(frozen_neg_dist, p=2)
-            # loss += loss_reg * reg_coeff
-            
-            ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
             # Optimize
             optimizer.zero_grad()
@@ -431,56 +451,65 @@ if __name__ == "__main__":
 
         avg_train_loss = train_loss_sum / num_batches
         avg_sup_loss = sup_loss_sum / num_batches
-        avg_reg_loss = reg_loss_sum / num_batches
+        # avg_reg_loss = reg_loss_sum / num_batches
         print(f"Epoch {epoch+1}/{ce_epochs}, Training Loss: {avg_train_loss:.4f}")
 
         # TensorBoard에 기록
-        writer.add_scalar('Loss/Train_loss', avg_train_loss, epoch)
-        writer.add_scalar('Loss/Sup_loss', avg_sup_loss, epoch)
-        writer.add_scalar('Loss/Reg_loss', avg_reg_loss, epoch)
+        writer.add_scalar('Loss/Train_CE_loss', avg_train_loss, epoch)
+        writer.add_scalar('Loss/Sup_CE_loss', avg_sup_loss, epoch)
+        # writer.add_scalar('Loss/Reg_loss', avg_reg_loss, epoch)
 
         # validation per 10 epochs
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             val_loss_sum = 0.0
             val_sup_loss_sum = 0.0
-            val_reg_loss_sum = 0.0
+            # val_reg_loss_sum = 0.0
+            correct_predictions = 0
+            total_samples = 0
             model.eval()
             with torch.no_grad():
-                for val_batch_label in get_batch(val_dir, val_triplet, batch_size=32, preprocess=True, need_meta=True):
-                    
+                for batch_idx, sample in enumerate(val_loader):
+
                     # Main loss
-                    val_sup_loss = main_loss(model, val_batch_label)
+                    val_sup_loss = main1_loss(model, sample)
                     val_sup_loss_sum += val_sup_loss.item()
 
-                    # Aux loss
-                    val_reg_loss = aux_loss(model, frozen_model, val_batch_label)
-                    val_reg_loss_sum += val_reg_loss.item()
-
                     # Total loss
-                    loss = val_sup_loss + val_reg_loss * reg_coeff
+                    loss = val_sup_loss 
                     val_loss_sum += loss.item()
 
+                    # Accuracy Calculation
+                    # ipdb.set_trace()
+                    img, target = sample
+                    img = img.cuda()
+                    target = target.cuda()
+
+                    logit = model(img)
+                    predict = torch.argmax(logit, dim=1)
+                    correct_predictions += (predict == target).sum().item()
+                    total_samples += target.size(0)
+                    
             avg_val_loss = val_loss_sum / (len(val_triplet) / 32)
             avg_val_sup_loss = val_sup_loss_sum / (len(val_triplet) / 32)
-            avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
+            epoch_accuracy = correct_predictions / total_samples
+            # avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
             
-            print(f"Epoch {epoch+1}/{ce_epochs}, Validation Loss: {avg_val_loss:.4f}")
+            print(f'Epoch {epoch+1}/{ce_epochs}, Loss: {avg_val_loss:.4f}, Sup_loss : {avg_val_sup_loss:.4f} Accuracy: {epoch_accuracy * 100:.2f}%')
 
             # TensorBoard에 기록
-            writer.add_scalar('Loss/Validation_loss', avg_val_loss, epoch)
-            writer.add_scalar('Loss/Validation_sup_loss', avg_val_sup_loss, epoch)
-            writer.add_scalar('Loss/Validation_reg_loss', avg_val_reg_loss, epoch)
+            writer.add_scalar('Loss/Validation_CE_loss', avg_val_loss, epoch)
+            writer.add_scalar('Loss/Validation_sup_CE_loss', avg_val_sup_loss, epoch)
+            # writer.add_scalar('Loss/Validation_reg_loss', avg_val_reg_loss, epoch)
 
             # Train Mode로 다시 돌아오기
             model.train()
-    
-    
-    
-    
-    
-    
+
+
+    # Model 변경
+    model = ModifiedInceptionResnetV1(model)
+
     # Triplet loss 적용
-    for epoch in range(triplet_epochs):
+    for epoch in range(ce_epochs, num_epochs):
         # train loss 
         train_loss_sum = 0.0
         sup_loss_sum = 0.0
@@ -493,24 +522,13 @@ if __name__ == "__main__":
         
         # Triplet에 대해서 학습 적용하기
         for batch_label in get_batch(train_dir, train_triplet, batch_size=32, preprocess=True, need_meta=True):
-            # 에포크마다 시드를 변경 (옵션)
             random.seed(epoch)
             np.random.seed(epoch)
             torch.manual_seed(epoch)
             torch.cuda.manual_seed_all(epoch)
 
-            #ipdb.set_trace()
-
-            
-            # anchor_embedding = model(anchor)
-            # positive_embedding = model(positive)
-            # negative_embedding = model(negative)
-            
-            # loss = criterion(anchor_embedding, positive_embedding, negative_embedding)
-            
-
             # Main loss
-            sup_loss = main_loss(model, batch_label)
+            sup_loss = main2_loss(model, batch_label)
             sup_loss_sum += sup_loss.item()
 
             # Aux loss
@@ -520,26 +538,6 @@ if __name__ == "__main__":
             # Total loss
             loss = sup_loss + reg_loss * reg_coeff
             train_loss_sum += loss.item()
-
-            '''
-            (예은, 선재)
-            Regularization Term 추가 - 여기만 Argument화 하든 class화 하든 여러번 실험하면 좋다
-            ''' 
-            # 이건 예시입니다
-            
-            # frozen_anchor_embedding = frozen_model(anchor)
-            # frozen_pos_embedding = frozen_model(positive)
-            # frozen_neg_embedding = frozen_model(negative)
-
-            # frozen_anchor_dist=  anchor_embedding - frozen_anchor_embedding
-            # frozen_pos_dist = positive_embedding - frozen_pos_embedding
-            # frozen_neg_dist = negative_embedding - frozen_neg_embedding
-            
-            # reg_coeff = 0.005   # hyper parameter
-            # loss_reg = torch.norm(frozen_anchor_dist, p=2) + torch.norm(frozen_pos_dist, p=2) + torch.norm(frozen_neg_dist, p=2)
-            # loss += loss_reg * reg_coeff
-            
-            ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
 
             # Optimize
             optimizer.zero_grad()
@@ -551,7 +549,7 @@ if __name__ == "__main__":
         avg_train_loss = train_loss_sum / num_batches
         avg_sup_loss = sup_loss_sum / num_batches
         avg_reg_loss = reg_loss_sum / num_batches
-        print(f"Epoch {epoch+1}/{triplet_epochs}, Training Loss: {avg_train_loss:.4f}")
+        print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {avg_train_loss:.4f}")
 
         # TensorBoard에 기록
         writer.add_scalar('Loss/Train_loss', avg_train_loss, epoch)
@@ -559,7 +557,7 @@ if __name__ == "__main__":
         writer.add_scalar('Loss/Reg_loss', avg_reg_loss, epoch)
 
         # validation per 10 epochs
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             val_loss_sum = 0.0
             val_sup_loss_sum = 0.0
             val_reg_loss_sum = 0.0
@@ -568,7 +566,7 @@ if __name__ == "__main__":
                 for val_batch_label in get_batch(val_dir, val_triplet, batch_size=32, preprocess=True, need_meta=True):
                     
                     # Main loss
-                    val_sup_loss = main_loss(model, val_batch_label)
+                    val_sup_loss = main2_loss(model, val_batch_label)
                     val_sup_loss_sum += val_sup_loss.item()
 
                     # Aux loss
@@ -583,7 +581,7 @@ if __name__ == "__main__":
             avg_val_sup_loss = val_sup_loss_sum / (len(val_triplet) / 32)
             avg_val_reg_loss = val_reg_loss_sum / (len(val_triplet) / 32)
             
-            print(f"Epoch {epoch+1}/{triplet_epochs}, Validation Loss: {avg_val_loss:.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs}, Validation Loss: {avg_val_loss:.4f}")
 
             # TensorBoard에 기록
             writer.add_scalar('Loss/Validation_loss', avg_val_loss, epoch)
