@@ -51,8 +51,15 @@ class Main_Loss:
             #ipdb.set_trace()
 
             img, target = sample
-            img = img.cuda()
-            target = target.cuda()
+
+            if torch.cuda.is_available():
+                img = img.cuda()
+            else:
+                img = img.cpu()
+            if torch.cuda.is_available():
+                target = target.cuda()
+            else:
+                target = target.cpu()
 
             logit = model(img)
             loss = self.criterion(logit, target)
@@ -135,7 +142,10 @@ class Aux_Loss:
         def forward(self, model, frozen_model, batch_label):
             # Implement the RandReg loss calculation here
             with torch.no_grad():
-                z = torch.normal(mean=self.mu, std=self.sigma).unsqueeze(0).cuda()
+                if torch.cuda.is_available():
+                    z = torch.normal(mean=self.mu, std=self.sigma).unsqueeze(0).cuda()
+                else:
+                    z = torch.normal(mean=self.mu, std=self.sigma).unsqueeze(0).cpu()
 
             #ipdb.set_trace()
 
