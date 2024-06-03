@@ -432,8 +432,8 @@ if __name__ == "__main__":
                     # Accuracy Calculation
                     # ipdb.set_trace()
                     img, target = sample
-                    img = img.cuda()
-                    target = target.cuda()
+                    img = img.to(device)
+                    target = target.to(device)
 
                     logit = model(img)
                     predict = torch.argmax(logit, dim=1)
