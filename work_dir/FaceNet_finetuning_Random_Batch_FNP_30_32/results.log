@@ -1,3 +1,0 @@
-2024-06-02 22:22:12,014 - test_dir : ./Face_Dataset/Test
-2024-06-02 22:22:12,014 - pretrained : work_dir/FaceNet_finetuning_Random_Batch_FNP_30_32/FaceNet_finetuning_Random_Batch_FNP_30_32_deepfake.pth
-2024-06-02 22:22:12,014 - model_name : FaceNet_finetuning_Random_Batch_FNP
