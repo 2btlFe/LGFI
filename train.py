@@ -199,58 +199,58 @@ if __name__ == "__main__":
 
     #----------Training Set 얼굴 crop--------------------------------------------------------------------#
 
-    # # 1. MTCNN 불러오기
-    # mtcnn = MTCNN(
-    #     image_size=160, margin=0, min_face_size=20,
-    #     thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
-    #     device=device
-    # )
+    # 1. MTCNN 불러오기
+    mtcnn = MTCNN(
+        image_size=160, margin=0, min_face_size=20,
+        thresholds=[0.6, 0.7, 0.7], factor=0.709, post_process=True,
+        device=device
+    )
 
-    # # 2. 얼굴 Crop을 위한 Dataset 지정
-    # dataset = datasets.ImageFolder(train_dir, transform=transforms.Resize((512, 512)))
-    # dataset.samples = [
-    #     (p, p.replace(train_dir, train_dir + '_cropped'))
-    #         for p, _ in dataset.samples
-    # ]
+    # 2. 얼굴 Crop을 위한 Dataset 지정
+    dataset = datasets.ImageFolder(train_dir, transform=transforms.Resize((512, 512)))
+    dataset.samples = [
+        (p, p.replace(train_dir, train_dir + '_cropped'))
+            for p, _ in dataset.samples
+    ]
 
-    # # 3. 얼굴 Crop을 위한 데이터 로더 지정
-    # loader = DataLoader(
-    #     dataset,
-    #     num_workers=workers,
-    #     batch_size=batch_size,
-    #     collate_fn=training.collate_pil
-    # )
+    # 3. 얼굴 Crop을 위한 데이터 로더 지정
+    loader = DataLoader(
+        dataset,
+        num_workers=workers,
+        batch_size=batch_size,
+        collate_fn=training.collate_pil
+    )
 
-    # # 4. 실제 얼굴 Crop 실행 및 저장 (Train_cropped에 저장됨)
-    # for i, (x, y) in enumerate(loader):
-    #     mtcnn(x, save_path=y)
-    #     print('\rBatch {} of {}'.format(i + 1, len(loader)), end='')
+    # 4. 실제 얼굴 Crop 실행 및 저장 (Train_cropped에 저장됨)
+    for i, (x, y) in enumerate(loader):
+        mtcnn(x, save_path=y)
+        print('\rBatch {} of {}'.format(i + 1, len(loader)), end='')
 
     #--------------------------------------------------------------------------------------------------#
 
     #----------Validztion Set 얼굴 crop--------------------------------------------------------------------#
-    # 1. 얼굴 crop을 위한 Validation dataset 생성
-    # val_dataset = datasets.ImageFolder(val_dir, transform=transforms.Resize((512, 512)))
-    # val_dataset.samples = [
-    #     (p, p.replace(val_dir, val_dir + '_cropped'))
-    #         for p, _ in val_dataset.samples
-    # ]
+    #1. 얼굴 crop을 위한 Validation dataset 생성
+    val_dataset = datasets.ImageFolder(val_dir, transform=transforms.Resize((512, 512)))
+    val_dataset.samples = [
+        (p, p.replace(val_dir, val_dir + '_cropped'))
+            for p, _ in val_dataset.samples
+    ]
     
-    # # 2. 데이터로더 제작
-    # val_loader = DataLoader(
-    #     val_dataset,
-    #     num_workers=workers,
-    #     batch_size=batch_size,
-    #     collate_fn=training.collate_pil
-    # )
+    # 2. 데이터로더 제작
+    val_loader = DataLoader(
+        val_dataset,
+        num_workers=workers,
+        batch_size=batch_size,
+        collate_fn=training.collate_pil
+    )
 
-    # # 3. 얼굴 crop 실행
-    # for i, (x, y) in enumerate(val_loader):
-    #     mtcnn(x, save_path=y)
-    #     print('\rBatch {} of {}'.format(i + 1, len(val_loader)), end='')
+    # 3. 얼굴 crop 실행
+    for i, (x, y) in enumerate(val_loader):
+        mtcnn(x, save_path=y)
+        print('\rBatch {} of {}'.format(i + 1, len(val_loader)), end='')
 
-    # # mtcnn GPU에서 내리기
-    # del mtcnn
+    # mtcnn GPU에서 내리기
+    del mtcnn
     #----------------------------------------------------------------------------------------------------#
 
     # InceptionResnetV1 불러오기 - vggface2로 pretrained한 모델 가져오기--------------------------------------#
@@ -262,36 +262,31 @@ if __name__ == "__main__":
     
 
     #------------------------------------------Freeze model -------------------------------------------#
-    # # Freeze all layers
-    # for param in model.parameters():
-    #     param.requires_grad = False
+    # Freeze all layers
+    for param in model.parameters():
+        param.requires_grad = False
 
-    # # Unfreeze some specific layers, for example, the last linear layer and last batch norm layer
-    # for param in model.last_linear.parameters():
-    #     param.requires_grad = True
-    # for param in model.last_bn.parameters():
-    #     param.requires_grad = True
+    # Unfreeze some specific layers, for example, the last linear layer and last batch norm layer
+    for param in model.last_linear.parameters():
+        param.requires_grad = True
+    for param in model.last_bn.parameters():
+        param.requires_grad = True
 
-    # # Set different learning rates
-    # learning_rate_1 = 1e-4  # For frozen layers (though they are frozen, this shows the setup)
-    # learning_rate_2 = 1e-3  # For unfrozen layers
+    # Set different learning rates
+    learning_rate_1 = 1e-4  # For frozen layers (though they are frozen, this shows the setup)
+    learning_rate_2 = 1e-3  # For unfrozen layers
 
-    # # Define parameter groups
-    # param_groups = [
-    #     {'params': model.conv2d_1a.parameters(), 'lr': learning_rate_1},
-    #     {'params': model.conv2d_2a.parameters(), 'lr': learning_rate_1},
-    #     {'params': model.conv2d_2b.parameters(), 'lr': learning_rate_1},
-    #     {'params': model.last_linear.parameters(), 'lr': learning_rate_2},
-    #     {'params': model.last_bn.parameters(), 'lr': learning_rate_2}
-    # ]
+    # Define parameter groups
+    param_groups = [
+        {'params': model.conv2d_1a.parameters(), 'lr': learning_rate_1},
+        {'params': model.conv2d_2a.parameters(), 'lr': learning_rate_1},
+        {'params': model.conv2d_2b.parameters(), 'lr': learning_rate_1},
+        {'params': model.last_linear.parameters(), 'lr': learning_rate_2},
+        {'params': model.last_bn.parameters(), 'lr': learning_rate_2}
+    ]
 
-    # # Create an optimizer
-    # optimizer = optim.Adam(param_groups)
-
-
-
-
-
+    # Create an optimizer
+    optimizer = optim.Adam(param_groups)
 
 
     #model.logits = nn.Linear(in_features=128, out_features=60, bias=True)
@@ -351,43 +346,43 @@ if __name__ == "__main__":
     #---------------------------------------#
     
     # Find Frozen Embedding Mu / Sigma    
-    class_dir = os.listdir(train_dir)
+    # class_dir = os.listdir(train_dir)
 
-    num_class = len(class_dir)
-    mu = [torch.zeros(512, requires_grad=False)] # Training Mean
-    sigma = [torch.ones(512, requires_grad=False)]            # Fixed Stdev
+    # num_class = len(class_dir)
+    # mu = [torch.zeros(512, requires_grad=False)] # Training Mean
+    # sigma = [torch.ones(512, requires_grad=False)]            # Fixed Stdev
 
-    frozen_model.eval()
-    # Frozen Embedding 
-    with torch.no_grad():
-        train_dir_list = os.listdir(train_dir)
-        embedding = []
-        total = 0
-        for label in train_dir_list:
+    # frozen_model.eval()
+    # # Frozen Embedding 
+    # with torch.no_grad():
+    #     train_dir_list = os.listdir(train_dir)
+    #     embedding = []
+    #     total = 0
+    #     for label in train_dir_list:
             
-            path = os.path.join(train_dir, label)
-            files = list(os.listdir(path))
+    #         path = os.path.join(train_dir, label)
+    #         files = list(os.listdir(path))
 
-            for file in files:
-                idx = [label, file]
-                img = trans(read_image(train_dir, idx)).to(device)   #tensor [3, 160, 160]
-                temp_emb = get_embedding(frozen_model, img)  
-                embedding.append(temp_emb)
+    #         for file in files:
+    #             idx = [label, file]
+    #             img = trans(read_image(train_dir, idx)).to(device)   #tensor [3, 160, 160]
+    #             temp_emb = get_embedding(frozen_model, img)  
+    #             embedding.append(temp_emb)
             
-            total += len(files)
-            print(f"{label} : {len(files)} / {total}")
+    #         total += len(files)
+    #         print(f"{label} : {len(files)} / {total}")
 
 
-        # average embedding
-        #ipdb.set_trace()
-        avg_emb = torch.mean(torch.stack(embedding), dim=0)
-        std_emb = torch.std(torch.stack(embedding), dim=0)
-        #optimizer = torch.optim.SGD([param for param in mu if param.requires_grad], lr=0.01)
-    #---------------------------------------#
+    #     # average embedding
+    #     #ipdb.set_trace()
+    #     avg_emb = torch.mean(torch.stack(embedding), dim=0)
+    #     std_emb = torch.std(torch.stack(embedding), dim=0)
+    #     #optimizer = torch.optim.SGD([param for param in mu if param.requires_grad], lr=0.01)
+    # #---------------------------------------#
 
     # 학습 툴 지정 --------------------------------------------------------------------------------------#
     # Define Optimizer 
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # optimizer = optim.Adam(model.parameters(), lr=0.001)
     # Define Scheduler 
     scheduler = MultiStepLR(optimizer, [5, 10])
     # Define Loss and Evaluation functions
