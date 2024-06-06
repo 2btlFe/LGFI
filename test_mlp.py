@@ -239,7 +239,7 @@ if __name__ == "__main__":
     incorrect_classes = []
     for image, label in test_loader:
         image = image.to(device)
-        label = class_names[int(label)]
+        label = int(label)
 
         
         output = model(image)
